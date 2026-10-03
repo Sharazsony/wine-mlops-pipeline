@@ -5,7 +5,6 @@ Unit tests for src/data.py — data loading and validation.
 """
 
 import pytest
-import pandas as pd
 from src.data import load_and_split, validate_data, EXPECTED_FEATURES, EXPECTED_CLASSES
 
 

@@ -66,7 +66,9 @@ def train_and_log(model_family: str, params: dict, X_train, y_train, X_test, y_t
     -------
     dict with run_id and cv_val_f1_macro
     """
-    with mlflow.start_run(run_name=f"{model_family}_{'_'.join(str(v) for v in params.values())}") as run:
+    params_str = "_".join(str(v) for v in params.values())
+    run_name = f"{model_family}_{params_str}"
+    with mlflow.start_run(run_name=run_name) as run:
 
         # Build model
         if model_family == "RandomForest":

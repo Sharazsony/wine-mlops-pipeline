@@ -52,7 +52,10 @@ def evaluate_champion():
     print(f"  Accuracy        : {test_acc:.4f}")
     print(f"  Log Loss        : {test_logloss:.4f}")
     print(f"  Latency (batch) : {latency_ms:.2f} ms")
-    print("\n" + classification_report(y_test, y_pred, target_names=["class_0", "class_1", "class_2"]))
+    report = classification_report(
+        y_test, y_pred, target_names=["class_0", "class_1", "class_2"]
+    )
+    print("\n" + report)
 
     # ---- Output schema check ----
     unique_preds = set(int(v) for v in y_pred)
