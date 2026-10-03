@@ -5,6 +5,8 @@ Train RandomForestClassifier and GradientBoostingClassifier on the Wine
 dataset. Logs all hyperparameter configurations to MLflow, runs 5-fold
 stratified cross-validation, and registers the best model as 'WineClassifier'
 with alias 'champion'.
+
+Compatible with: mlflow==2.16.2, scikit-learn==1.5.2, Python 3.10
 """
 
 import time
@@ -24,7 +26,7 @@ REGISTRY_MODEL_NAME = "WineClassifier"
 CV_FOLDS = 5
 
 # ------------------------------------------------------------------
-# Hyperparameter search grids (≥ 3 configs per family as required)
+# Hyperparameter search grids (3 configs per family as required)
 # ------------------------------------------------------------------
 RF_GRID = [
     {"n_estimators": 50,  "max_depth": 3,    "min_samples_split": 2},
@@ -41,7 +43,9 @@ GBM_GRID = [
 
 def _cv_metrics(model, X_train, y_train):
     """Run 5-fold stratified CV and return mean metrics dict."""
-    skf = StratifiedKFold(n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE)
+    skf = StratifiedKFold(
+        n_splits=CV_FOLDS, shuffle=True, random_state=RANDOM_STATE
+    )
     cv_results = cross_validate(
         model, X_train, y_train,
         cv=skf,
@@ -50,149 +54,137 @@ def _cv_metrics(model, X_train, y_train):
         n_jobs=-1
     )
     return {
-        "cv_train_accuracy":  float(np.mean(cv_results["train_accuracy"])),
-        "cv_val_accuracy":    float(np.mean(cv_results["test_accuracy"])),
-        "cv_train_f1_macro":  float(np.mean(cv_results["train_f1_macro"])),
-        "cv_val_f1_macro":    float(np.mean(cv_results["test_f1_macro"])),
-        "cv_val_log_loss":    float(-np.mean(cv_results["test_neg_log_loss"])),
+        "cv_train_accuracy": float(np.mean(cv_results["train_accuracy"])),
+        "cv_val_accuracy":   float(np.mean(cv_results["test_accuracy"])),
+        "cv_train_f1_macro": float(np.mean(cv_results["train_f1_macro"])),
+        "cv_val_f1_macro":   float(np.mean(cv_results["test_f1_macro"])),
+        "cv_val_log_loss":   float(-np.mean(cv_results["test_neg_log_loss"])),
     }
 
 
-def train_and_log(model_family: str, params: dict, X_train, y_train, X_test, y_test):
-    """
-    Train a single model configuration, log to MLflow, return run info.
-
-    Returns
-    -------
-    dict with run_id and cv_val_f1_macro
-    """
+def train_and_log(
+    model_family, params, X_train, y_train, X_test, y_test
+):
+    """Train one config, log to MLflow, return run metadata."""
     params_str = "_".join(str(v) for v in params.values())
     run_name = f"{model_family}_{params_str}"
+
     with mlflow.start_run(run_name=run_name) as run:
 
-        # Build model
+        # ---- Build model ----
         if model_family == "RandomForest":
             model = RandomForestClassifier(
-                random_state=RANDOM_STATE,
-                **params
+                random_state=RANDOM_STATE, **params
             )
         else:
             model = GradientBoostingClassifier(
-                random_state=RANDOM_STATE,
-                **params
+                random_state=RANDOM_STATE, **params
             )
 
-        # ---- Cross-validation metrics ----
+        # ---- Cross-validation ----
         cv_metrics = _cv_metrics(model, X_train, y_train)
 
-        # ---- Full train on training split ----
+        # ---- Full fit on training split ----
         model.fit(X_train, y_train)
 
-        # ---- Test-split metrics ----
+        # ---- Test split metrics ----
         y_pred = model.predict(X_test)
         y_proba = model.predict_proba(X_test)
-
         test_f1 = f1_score(y_test, y_pred, average="macro")
         test_acc = accuracy_score(y_test, y_pred)
         test_logloss = log_loss(y_test, y_proba)
 
-        # ---- Latency benchmark (batch) ----
+        # ---- Inference latency ----
         start = time.perf_counter()
-        _ = model.predict(X_test)
+        model.predict(X_test)
         latency_ms = (time.perf_counter() - start) * 1000
 
-        # ---- MLflow logging ----
+        # ---- MLflow: tags, params, metrics ----
         mlflow.set_tag("model_family", model_family)
-        mlflow.set_tag("cv_folds", CV_FOLDS)
-
-        log_params = {"model_family": model_family, **params}
-        mlflow.log_params(log_params)
-
+        mlflow.set_tag("cv_folds", str(CV_FOLDS))
+        mlflow.log_params({"model_family": model_family, **params})
         mlflow.log_metrics({
             **cv_metrics,
-            "test_f1_macro":  test_f1,
-            "test_accuracy":  test_acc,
-            "test_log_loss":  test_logloss,
+            "test_f1_macro":        test_f1,
+            "test_accuracy":        test_acc,
+            "test_log_loss":        test_logloss,
             "inference_latency_ms": latency_ms,
         })
 
-        # ---- Model signature + artifact ----
+        # ---- Model artifact + signature ----
         input_example = X_train.iloc[:5]
         signature = infer_signature(X_train, model.predict(X_train))
-
         mlflow.sklearn.log_model(
             sk_model=model,
-            name="model",
+            artifact_path="model",
             signature=signature,
             input_example=input_example,
-            skops_trusted_types=[
-                "sklearn.tree._tree.Tree",
-                "sklearn.tree._classes.DecisionTreeClassifier",
-                "sklearn.ensemble._forest.RandomForestClassifier",
-                "sklearn.ensemble._gb.GradientBoostingClassifier",
-                "sklearn.ensemble._gb.PriorProbabilityEstimator",
-                "sklearn.ensemble._gb.ScaledLogOddsEstimator",
-            ],
         )
 
         print(
-            f"  [{model_family}] params={params} | "
-            f"cv_val_f1={cv_metrics['cv_val_f1_macro']:.4f} | "
-            f"test_f1={test_f1:.4f} | latency={latency_ms:.2f}ms | "
-            f"run_id={run.info.run_id[:8]}"
+            f"  [{model_family}] {params} | "
+            f"cv_f1={cv_metrics['cv_val_f1_macro']:.4f} | "
+            f"test_f1={test_f1:.4f} | "
+            f"lat={latency_ms:.1f}ms | "
+            f"run={run.info.run_id[:8]}"
         )
 
         return {
-            "run_id": run.info.run_id,
+            "run_id":          run.info.run_id,
             "cv_val_f1_macro": cv_metrics["cv_val_f1_macro"],
-            "model_family": model_family,
-            "params": params,
+            "model_family":    model_family,
+            "params":          params,
         }
 
 
 def run_experiment():
-    """Run all hyperparameter configs and register the champion model."""
+    """Run all configs, register champion model."""
     mlflow.set_tracking_uri("sqlite:///mlruns.db")
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     X_train, X_test, y_train, y_test, _ = load_and_split()
-
     all_runs = []
 
     print("\n=== RandomForest Configurations ===")
     for params in RF_GRID:
-        result = train_and_log("RandomForest", params, X_train, y_train, X_test, y_test)
+        result = train_and_log(
+            "RandomForest", params, X_train, y_train, X_test, y_test
+        )
         all_runs.append(result)
 
     print("\n=== GradientBoosting Configurations ===")
     for params in GBM_GRID:
-        result = train_and_log("GradientBoosting", params, X_train, y_train, X_test, y_test)
+        result = train_and_log(
+            "GradientBoosting", params, X_train, y_train, X_test, y_test
+        )
         all_runs.append(result)
 
-    # ---- Find champion ----
+    # ---- Champion: best cv_val_f1_macro ----
     champion = max(all_runs, key=lambda r: r["cv_val_f1_macro"])
     print(
         f"\n=== Champion: {champion['model_family']} | "
-        f"cv_val_f1={champion['cv_val_f1_macro']:.4f} | "
-        f"run_id={champion['run_id'][:8]} ==="
+        f"cv_f1={champion['cv_val_f1_macro']:.4f} | "
+        f"run={champion['run_id'][:8]} ==="
     )
 
-    # ---- Register champion in Model Registry ----
+    # ---- Register in Model Registry ----
     model_uri = f"runs:/{champion['run_id']}/model"
-    registered = mlflow.register_model(model_uri=model_uri, name=REGISTRY_MODEL_NAME)
+    registered = mlflow.register_model(
+        model_uri=model_uri, name=REGISTRY_MODEL_NAME
+    )
 
+    # MLflow 2.x: use transition_model_version_stage or set alias
     client = mlflow.tracking.MlflowClient()
     client.set_registered_model_alias(
         name=REGISTRY_MODEL_NAME,
         alias="champion",
-        version=registered.version
+        version=registered.version,
     )
 
     print(
-        f"[registry] Registered '{REGISTRY_MODEL_NAME}' v{registered.version} "
-        f"with alias 'champion'."
+        f"[registry] '{REGISTRY_MODEL_NAME}' "
+        f"v{registered.version} -> alias='champion'"
     )
-
     return champion
 
 
