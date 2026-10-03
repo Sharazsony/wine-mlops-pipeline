@@ -8,10 +8,10 @@ lint:
 	flake8 src/ tests/ --max-line-length=100
 
 test:
-	pytest tests/ -v
+	PYTHONPATH=. pytest tests/ -v
 
 train:
-	python src/train.py
+	PYTHONPATH=. python src/train.py
 
 clean:
 	find . -type f -name "*.pyc" -delete

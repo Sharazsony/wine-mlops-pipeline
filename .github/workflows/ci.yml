@@ -25,11 +25,11 @@ jobs:
       - name: Lint (flake8)
         run: make lint
 
-      - name: Run unit tests (data + pipeline)
-        run: pytest tests/test_data.py -v
+      - name: Run data pipeline tests
+        run: PYTHONPATH=. pytest tests/test_data.py -v
 
       - name: Train models and register champion
         run: make train
 
       - name: MLOps Quality Gate
-        run: pytest tests/test_model_gate.py -v
+        run: PYTHONPATH=. pytest tests/test_model_gate.py -v
